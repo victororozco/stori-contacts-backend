@@ -89,3 +89,20 @@ def override_settings():
     1. Set the DATABASE_URL in the settings to use the test database URL.
     """
     settings.DATABASE_URL = TEST_DATABASE_URL
+    
+@pytest.fixture(scope="function", autouse=True)
+def clear_db():
+    yield
+    
+    engine = create_engine("sqlite:///./test.db")
+    SessionLocal = sessionmaker(bind=engine)
+    db = SessionLocal()
+    try:
+        for table in reversed(Base.metadata.sorted_tables):
+            db.execute(table.delete())
+        db.commit()
+    except:
+        db.rollback()
+        raise
+    finally:
+        db.close()

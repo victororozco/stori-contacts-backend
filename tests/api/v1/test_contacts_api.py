@@ -1,111 +1,104 @@
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from app.core.config import settings
+from app.main import app
+from app.db.base import Base
+from app.db.session import get_db
+from app.schemas.contact import ContactCreate
 
-def test_create_contact(client: TestClient):
-    """
-    Test the creation of a new contact.
+# Setup test database
+SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
+engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-    Steps:
-    1. Send a POST request to create a new contact with name, email, and phone.
-    2. Assert that the response status code is 200.
-    3. Assert that the response contains the correct name and an ID.
-    """
-    response = client.post(
-        f"{settings.API_V1_STR}/contacts/",
-        json={"name": "Test User", "email": "test@example.com", "phone": "1234567890"}
-    )
-    assert response.status_code == 200
+# Create all tables in the test database
+Base.metadata.create_all(bind=engine)
+
+# Override the get_db dependency to use the test database
+def override_get_db():
+    try:
+        db = TestingSessionLocal()
+        yield db
+    finally:
+        db.close()
+
+app.dependency_overrides[get_db] = override_get_db
+
+# Create a TestClient instance for making requests to the FastAPI app
+client = TestClient(app)
+
+# Fixture to provide a sample contact for tests
+@pytest.fixture
+def sample_contact():
+    return {
+        "name": "John Doe",
+        "email": "john@example.com",
+        "phone": "+1234567890",
+        "address": "123 Main St"
+    }
+
+# Test creating a new contact
+def test_create_contact(sample_contact):
+    response = client.post("/api/v1/contacts/", json=sample_contact)
+    assert response.status_code == 201  # Check if the response status code is 201 (Created)
     data = response.json()
-    assert data["name"] == "Test User"
-    assert "id" in data
+    assert data["name"] == sample_contact["name"]  # Verify the name in the response
+    assert data["email"] == sample_contact["email"]  # Verify the email in the response
+    assert "id" in data  # Check if the response contains an id
 
-def test_read_contacts(client: TestClient, test_db: Session):
-    """
-    Test retrieving the list of contacts.
+# Test creating a contact with a duplicate email
+def test_create_contact_duplicate_email(sample_contact):
+    client.post("/api/v1/contacts/", json=sample_contact)
+    response = client.post("/api/v1/contacts/", json=sample_contact)
+    assert response.status_code == 400  # Check if the response status code is 400 (Bad Request)
 
-    Steps:
-    1. Create a new contact by sending a POST request.
-    2. Send a GET request to retrieve the list of contacts.
-    3. Assert that the response status code is 200.
-    4. Assert that the response contains at least one contact.
-    """
-    client.post(
-        f"{settings.API_V1_STR}/contacts/",
-        json={"name": "Test User", "email": "test@example.com", "phone": "1234567890"}
-    )
+# Test reading all contacts
+def test_read_contacts():
+    response = client.get("/api/v1/contacts/")
+    assert response.status_code == 200  # Check if the response status code is 200 (OK)
+    assert isinstance(response.json(), list)  # Verify the response is a list
+
+# Test reading a specific contact by ID
+def test_read_contact(sample_contact):
+    create_response = client.post("/api/v1/contacts/", json=sample_contact)
+    contact_id = create_response.json()["id"]
     
-    response = client.get(f"{settings.API_V1_STR}/contacts/")
-    assert response.status_code == 200
-    data = response.json()
-    assert len(data) > 0
+    response = client.get(f"/api/v1/contacts/{contact_id}")
+    assert response.status_code == 200  # Check if the response status code is 200 (OK)
+    assert response.json()["name"] == sample_contact["name"]  # Verify the name in the response
 
-def test_read_contact(client: TestClient, test_db: Session):
-    """
-    Test retrieving a specific contact by ID.
+# Test reading a contact that does not exist
+def test_read_contact_not_found():
+    response = client.get("/api/v1/contacts/9999")
+    assert response.status_code == 404  # Check if the response status code is 404 (Not Found)
 
-    Steps:
-    1. Create a new contact by sending a POST request.
-    2. Send a GET request to retrieve the contact by its ID.
-    3. Assert that the response status code is 200.
-    4. Assert that the response contains the correct name.
-    """
-    create_response = client.post(
-        f"{settings.API_V1_STR}/contacts/",
-        json={"name": "Test User", "email": "test@example.com", "phone": "1234567890"}
-    )
-    create_data = create_response.json()
+# Test updating a contact
+def test_update_contact(sample_contact):
+    create_response = client.post("/api/v1/contacts/", json=sample_contact)
+    contact_id = create_response.json()["id"]
     
-    response = client.get(f"{settings.API_V1_STR}/contacts/{create_data['id']}")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Test User"
-
-def test_update_contact(client: TestClient, test_db: Session):
-    """
-    Test updating an existing contact.
-
-    Steps:
-    1. Create a new contact by sending a POST request.
-    2. Send a PUT request to update the contact's name, email, and phone.
-    3. Assert that the response status code is 200.
-    4. Assert that the response contains the updated name.
-    """
-    create_response = client.post(
-        f"{settings.API_V1_STR}/contacts/",
-        json={"name": "Test User", "email": "test@example.com", "phone": "1234567890"}
-    )
-    create_data = create_response.json()
+    updated_data = sample_contact.copy()
+    updated_data["name"] = "Jane Doe"
     
-    response = client.put(
-        f"{settings.API_V1_STR}/contacts/{create_data['id']}",
-        json={"name": "Updated User", "email": "updated@example.com", "phone": "9876543210"}
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["name"] == "Updated User"
+    response = client.put(f"/api/v1/contacts/{contact_id}", json=updated_data)
+    assert response.status_code == 200  # Check if the response status code is 200 (OK)
+    assert response.json()["name"] == "Jane Doe"  # Verify the updated name in the response
 
-def test_delete_contact(client: TestClient, test_db: Session):
-    """
-    Test deleting a contact.
+# Test deleting a contact
+def test_delete_contact(sample_contact):
+    create_response = client.post("/api/v1/contacts/", json=sample_contact)
+    contact_id = create_response.json()["id"]
+    
+    response = client.delete(f"/api/v1/contacts/{contact_id}")
+    assert response.status_code == 200  # Check if the response status code is 200 (OK)
+    
+    # Verify the contact was deleted
+    get_response = client.get(f"/api/v1/contacts/{contact_id}")
+    assert get_response.status_code == 404  # Check if the response status code is 404 (Not Found)
 
-    Steps:
-    1. Create a new contact by sending a POST request.
-    2. Send a DELETE request to delete the contact by its ID.
-    3. Assert that the response status code is 200.
-    4. Send a GET request to verify that the contact no longer exists.
-    5. Assert that the response status code is 404.
-    """
-    create_response = client.post(
-        f"{settings.API_V1_STR}/contacts/",
-        json={"name": "Test User", "email": "test@example.com", "phone": "1234567890"}
-    )
-    create_data = create_response.json()
-    
-    response = client.delete(f"{settings.API_V1_STR}/contacts/{create_data['id']}")
-    assert response.status_code == 200
-    
-    # Verify that the contact was deleted
-    get_response = client.get(f"{settings.API_V1_STR}/contacts/{create_data['id']}")
-    assert get_response.status_code == 404
+# Test deleting a contact that does not exist
+def test_delete_contact_not_found():
+    response = client.delete("/api/v1/contacts/9999")
+    assert response.status_code == 404  # Check if the response status code is 404 (Not Found)

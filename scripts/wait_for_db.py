@@ -1,14 +1,18 @@
 import time
 import psycopg2
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def wait_for_db():
     dbname = os.getenv("POSTGRES_DB")
     user = os.getenv("POSTGRES_USER")
     password = os.getenv("POSTGRES_PASSWORD")
-    host = os.getenv("POSTGRES_PORT")
+    host = os.getenv("POSTGRES_HOST")
     
     print('Waiting for database...')
+    print(f"dbname={dbname}, user={user}, password={password}, host={host}")
     
     while True:
         try:

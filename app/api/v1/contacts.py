@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.db.session import get_db
 from app.schemas.contact import Contact, ContactCreate
@@ -9,9 +10,12 @@ from typing import List
 
 router = APIRouter()
 
-@router.post("/", response_model=Contact)
+@router.post("/", response_model=Contact, status_code=201)
 def create_contact(contact: ContactCreate, db: Session = Depends(get_db)):
-    return contact_service.create_contact(db, contact)
+    try:
+        return contact_service.create_contact(db, contact)
+    except IntegrityError as e:
+        raise HTTPException(status_code=400, detail=str(e.statement))
 
 @router.get("/", response_model=List[Contact])
 def read_contacts(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -27,10 +31,13 @@ def read_contact(contact_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{contact_id}", response_model=Contact)
 def update_contact(contact_id: int, contact: ContactCreate, db: Session = Depends(get_db)):
-    db_contact = contact_service.update_contact(db, contact_id, contact)
-    if db_contact is None:
-        raise HTTPException(status_code=404, detail="Contact not found")
-    return db_contact
+    try:
+        db_contact = contact_service.update_contact(db, contact_id, contact)
+        if db_contact is None:
+            raise HTTPException(status_code=404, detail="Contact not found")
+        return db_contact
+    except IntegrityError as e:
+        raise HTTPException(status_code=400, detail=str(e.statement))
 
 @router.delete("/{contact_id}", response_model=Contact)
 def delete_contact(contact_id: int, db: Session = Depends(get_db)):
